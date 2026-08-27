@@ -112,9 +112,14 @@ button { color: inherit; }
 .approve-button span { color: var(--lime); }.explain-button { border: 1px solid var(--line); background: white; }
 .approval-note { color: var(--muted); font-family: var(--font-dm-mono), monospace; text-align: center; font-size: 8px; }.approval-note span { color: #71a23e; }
 
-@media (max-width: 1050px) {
+@media (max-width: 1140px) {
   .workspace { grid-template-columns: 220px minmax(520px, 1fr); }
-  .agent-panel { display: none; }
+  .agent-panel {
+    display: flex;
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
 }
 @media (max-width: 760px) {
   .topbar { grid-template-columns: 1fr auto; height: 64px; }.project-switcher { display: none; }.sync-state { display: none; }
