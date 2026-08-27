@@ -85,6 +85,10 @@ export function calculateMetrics(steps: PlanStep[]): PlanMetrics {
 }
 
 export function stageSaferPlan(state: WorkspaceState): WorkspaceState {
+  if (calculateMetrics(state.steps).tightHandoffs === 0) {
+    return { ...state, proposal: null };
+  }
+
   const move: PlanMove = {
     stepId: 'dependency-check',
     toLane: 'now',

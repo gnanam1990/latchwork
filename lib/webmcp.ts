@@ -18,8 +18,10 @@ export interface ModelContextLike {
 export interface WorkspaceToolApi {
   getState(): WorkspaceState;
   findConflicts(): { conflicts: number; tightHandoffs: number; details: string[] };
-  stageSaferPlan(): PlanProposal;
+  stageSaferPlan(): PlanProposal | null;
 }
+
+export type ToolRegistrationErrorHandler = (toolName: string, error: unknown) => void;
 
 declare global {
   interface Document {
@@ -62,15 +64,29 @@ export function createLatchworkTools(api: WorkspaceToolApi): WebMcpTool[] {
   ];
 }
 
-export function registerLatchworkTools(modelContext: ModelContextLike, api: WorkspaceToolApi): () => void {
+export function registerLatchworkTools(
+  modelContext: ModelContextLike,
+  api: WorkspaceToolApi,
+  onError: ToolRegistrationErrorHandler = () => undefined,
+): () => void {
   const controller = new AbortController();
   for (const tool of createLatchworkTools(api)) {
-    void modelContext.registerTool(tool, { signal: controller.signal });
+    try {
+      const registration = modelContext.registerTool(tool, { signal: controller.signal });
+      void Promise.resolve(registration).catch((error: unknown) => onError(tool.name, error));
+    } catch (error) {
+      onError(tool.name, error);
+    }
   }
   return () => controller.abort();
 }
 
-export function installDocumentTools(api: WorkspaceToolApi): () => void {
+export function installDocumentTools(
+  api: WorkspaceToolApi,
+  onError: ToolRegistrationErrorHandler = (toolName, error) => {
+    console.error(`[Latchwork WebMCP] Failed to register ${toolName}`, error);
+  },
+): () => void {
   if (typeof document === 'undefined' || !document.modelContext) return () => undefined;
-  return registerLatchworkTools(document.modelContext, api);
+  return registerLatchworkTools(document.modelContext, api, onError);
 }

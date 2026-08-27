@@ -41,4 +41,23 @@ describe('Latchwork WebMCP tools', () => {
     cleanup();
     expect(registered.every(({ signal }) => signal?.aborted)).toBe(true);
   });
+
+  it('reports asynchronous registration failures without leaking rejections', async () => {
+    const errors: Array<{ toolName: string; error: unknown }> = [];
+    const context: ModelContextLike = {
+      registerTool: vi.fn(async () => {
+        throw new Error('duplicate tool name');
+      }),
+    };
+
+    registerLatchworkTools(context, api, (toolName, error) => errors.push({ toolName, error }));
+    await vi.waitFor(() => expect(errors).toHaveLength(3));
+
+    expect(errors.map(({ toolName }) => toolName)).toEqual([
+      'get_workspace_state',
+      'find_constraint_conflicts',
+      'stage_safer_plan',
+    ]);
+    expect(errors.every(({ error }) => error instanceof Error && error.message === 'duplicate tool name')).toBe(true);
+  });
 });

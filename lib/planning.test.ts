@@ -27,6 +27,14 @@ describe('Latchwork planning', () => {
     expect(applied.proposal).toBeNull();
   });
 
+  it('does not stage a no-op after the safer order is already active', () => {
+    const applied = applyStagedProposal(stageSaferPlan(initialWorkspace));
+    const restaged = stageSaferPlan(applied);
+
+    expect(restaged.proposal).toBeNull();
+    expect(restaged.steps).toEqual(applied.steps);
+  });
+
   it('rejects proposals that move locked work', () => {
     const unsafe: PlanProposal = {
       id: 'unsafe',

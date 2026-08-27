@@ -57,7 +57,7 @@ export default function Home() {
       const staged = stageSaferPlan(workspaceRef.current);
       workspaceRef.current = staged;
       setWorkspace(staged);
-      return staged.proposal!;
+      return staged.proposal;
     },
   }), []);
 
@@ -176,11 +176,13 @@ export default function Home() {
           </div>
 
           <div className="change-preview">
-            <span className="change-kicker">{workspace.proposal ? '2 staged changes' : 'No pending changes'}</span>
+            <span className="change-kicker">{workspace.proposal
+              ? `${workspace.proposal.moves.length} staged change${workspace.proposal.moves.length === 1 ? '' : 's'}`
+              : 'No pending changes'}</span>
             {workspace.proposal ? (
               <>
                 <div className="change-row"><i className="move-up">↑</i><p><strong>Verify dependency graph</strong><br /><span>Move before integration</span></p></div>
-                <div className="change-row"><i className="time-save">−</i><p><strong>Tool integration</strong><br /><span>Remove 2 tight handoffs</span></p></div>
+                <div className="change-row"><i className="time-save">−</i><p><strong>Expected impact</strong><br /><span>Remove 2 tight handoffs</span></p></div>
               </>
             ) : (
               <div className="change-row"><i className="time-save">✓</i><p><strong>Constraints preserved</strong><br /><span>Plan is ready to continue</span></p></div>
