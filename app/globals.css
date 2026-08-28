@@ -101,7 +101,7 @@ button { color: inherit; }
 .model-status-dot.idle, .model-status-dot.ready { background: #5ab77e; box-shadow: 0 0 0 3px rgba(90,183,126,.13); }
 .model-status-dot.loading, .model-status-dot.thinking { background: #e1a341; box-shadow: 0 0 0 3px rgba(225,163,65,.14); }
 .model-status-dot.error, .model-status-dot.unsupported { background: var(--coral); }
-.model-size { margin-left: auto; color: var(--muted); font-family: var(--font-dm-mono), monospace; font-size: 8px; white-space: nowrap; }
+.model-size { min-width: 0; margin-left: auto; color: var(--muted); font-family: var(--font-dm-mono), monospace; font-size: 8px; overflow-wrap: anywhere; text-align: right; }
 .model-card p { margin: 9px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
 .model-card .model-diagnostic { color: var(--ink); font-family: var(--font-dm-mono), monospace; font-size: 8px; }
 .model-progress { height: 5px; margin-top: 11px; overflow: hidden; border-radius: 999px; background: #e2e6e0; }
