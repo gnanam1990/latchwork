@@ -25,7 +25,7 @@ Model output is untrusted. Latchwork constrains it to a JSON decision schema, re
 
 See [the local runtime benchmark](docs/local-runtime-benchmark.md) for measured load behavior, focused decision latency, WebMCP proof, and current coverage limits.
 
-See [the solo work split](docs/agent-native-runtime-solo-work-split.md) for the PRD-aligned Day 1–6+ execution plan, ownership boundaries, milestones, and Day 3 success gate.
+See [the team work split](docs/agent-native-runtime-team-work-split.md) for the PRD-aligned responsibilities of Gnanasekaran, Anandh, and Vasanth; the parallel Day 1–6+ execution plan; ownership boundaries; milestones; and Day 3 success gate.
 
 The reusable runtime contract is implemented and tested independently of the current one-shot UI flow. Connecting the browser-local model and current WebMCP tool definitions through that runtime is the next integration slice; the README does not claim that integration is complete yet.
 
