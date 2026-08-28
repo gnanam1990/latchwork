@@ -8,14 +8,23 @@ export interface ModelLoadProgress {
   text: string;
 }
 
-export function supportsWebGpu(): boolean {
-  return typeof navigator !== 'undefined' && 'gpu' in navigator;
+export async function supportsWebGpu(): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !('gpu' in navigator)) return false;
+  const gpu = (navigator as unknown as {
+    gpu?: { requestAdapter(): Promise<unknown | null> };
+  }).gpu;
+  if (!gpu) return false;
+  try {
+    return Boolean(await gpu.requestAdapter());
+  } catch {
+    return false;
+  }
 }
 
 export async function createBrowserLocalModel(
   onProgress: (report: ModelLoadProgress) => void,
 ): Promise<LocalTextModel> {
-  if (!supportsWebGpu()) throw new Error('WebGPU is unavailable in this browser.');
+  if (!await supportsWebGpu()) throw new Error('WebGPU is unavailable in this browser.');
 
   const { CreateWebWorkerMLCEngine } = await import('@mlc-ai/web-llm');
   const worker = new Worker(new URL('./webllm.worker.ts', import.meta.url), { type: 'module' });

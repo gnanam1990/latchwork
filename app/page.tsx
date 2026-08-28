@@ -65,9 +65,10 @@ export default function Home() {
   );
 
   useEffect(() => {
-    const updateSupport = () => {
+    const updateSupport = async () => {
+      const isSupported = await supportsWebGpu();
       if (!mountedRef.current) return;
-      if (supportsWebGpu()) {
+      if (isSupported) {
         setModelStatus('idle');
         setModelDetail('WebGPU ready · model not loaded');
       } else {
@@ -75,7 +76,7 @@ export default function Home() {
         setModelDetail('WebGPU unavailable · safe planner still works');
       }
     };
-    queueMicrotask(updateSupport);
+    queueMicrotask(() => void updateSupport());
   }, []);
 
   useEffect(() => {
@@ -340,11 +341,13 @@ export default function Home() {
             )}
           </div>
 
-          <div className="approval-box">
-            <button className="approve-button" type="button" onClick={applyProposal} disabled={!workspace.proposal}>Apply proposed plan <span>→</span></button>
-            <button className="explain-button" type="button">Explain the tradeoffs</button>
+          <div className="approval-footer">
+            <div className="approval-box">
+              <button className="approve-button" type="button" onClick={applyProposal} disabled={!workspace.proposal}>Apply proposed plan <span>→</span></button>
+              <button className="explain-button" type="button">Explain the tradeoffs</button>
+            </div>
+            <p className="approval-note"><span>●</span> Nothing changes until you approve.</p>
           </div>
-          <p className="approval-note"><span>●</span> Nothing changes until you approve.</p>
         </aside>
       </section>
     </main>

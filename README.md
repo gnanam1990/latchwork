@@ -11,7 +11,7 @@ The foundation includes a working visual planning board, browser-local language-
 - Visual planning lanes and locked constraints
 - Deterministic conflict and handoff analysis
 - Optional Llama 3.2 1B inference in a dedicated Web Worker through WebLLM
-- Schema-constrained local decisions with a closed `stage`, `explain`, or `none` action set
+- Schema-constrained local decisions with a closed `stage_safer_plan`, `explain`, or `none` action set
 - Reviewable staged plan changes
 - Human-controlled final apply action
 - WebMCP tools with read-only annotations and abort-signal cleanup
