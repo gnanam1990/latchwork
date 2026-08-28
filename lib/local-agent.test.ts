@@ -22,7 +22,7 @@ describe('Latchwork local agent', () => {
   it('accepts only the closed decision contract', () => {
     expect(parseLocalAgentDecision('{"action":"explain"}', initialWorkspace)).toEqual({
       action: 'explain',
-      rationale: 'The plan preserves every locked constraint and currently has 0 conflicts and 2 tight handoffs.',
+      rationale: 'The plan preserves every locked constraint and currently has 2 tight handoffs.',
     });
     expect(() => parseLocalAgentDecision('not json', initialWorkspace)).toThrow('malformed JSON');
     expect(() => parseLocalAgentDecision('{"action":"apply_plan"}', initialWorkspace)).toThrow('unsupported action');
@@ -64,7 +64,8 @@ describe('Latchwork local agent', () => {
     const result = await runLocalAgent(model, appliedWorkspace, 'Explain the current plan');
 
     expect(result.workspace).toBe(appliedWorkspace);
-    expect(result.decision.rationale).toContain('0 conflicts and 0 tight handoffs');
+    expect(result.decision.rationale).toContain('0 tight handoffs');
+    expect(result.decision.rationale).not.toContain('conflicts');
     expect(result.decision.rationale).not.toContain('2 tight handoffs');
   });
 

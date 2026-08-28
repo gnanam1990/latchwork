@@ -105,7 +105,7 @@ function rationaleForAction(action: LocalAgentAction, state: WorkspaceState): st
       : 'The current plan has no tight handoffs, so no proposal was staged.';
   }
   if (action === 'explain') {
-    return `The plan preserves every locked constraint and currently has ${metrics.conflicts} conflicts and ${metrics.tightHandoffs} tight handoffs.`;
+    return `The plan preserves every locked constraint and currently has ${metrics.tightHandoffs} tight handoffs.`;
   }
   return 'No workspace change was requested, so the current plan remains untouched.';
 }
