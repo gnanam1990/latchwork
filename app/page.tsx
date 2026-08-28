@@ -296,7 +296,7 @@ export default function Home() {
             <div className="model-status-row">
               <span className={`model-status-dot ${modelStatus}`} />
               <strong>{modelStatus === 'ready' ? 'Local model online' : modelStatus === 'thinking' ? 'Thinking locally' : 'Local model'}</strong>
-              <span className="model-size">~0.66 GB download</span>
+              <span className="model-size">0.66 GB download · 0.9 GB GPU</span>
             </div>
             <p>{modelDetail}</p>
             {lastDecision && <p className="model-diagnostic">Last decision · {lastDecision}</p>}
