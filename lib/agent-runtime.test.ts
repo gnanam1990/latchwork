@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AgentRuntimeError,
+  buildAgentRuntimePrompt,
   parseAgentDecision,
   runAgentRuntime,
   type RuntimeModel,
@@ -114,6 +115,28 @@ describe('agent-native runtime', () => {
     })).rejects.toThrow('readOnlyHint must be boolean');
     expect(model.generate).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('normalizes model tool names and rejects malformed registry names', async () => {
+    const execute = vi.fn(() => ({ inspected: true }));
+    const result = await runAgentRuntime({
+      goal: 'Inspect safely.',
+      model: sequenceModel([
+        '{"type":"tool_call","tool":" inspect ","input":{}}',
+        '{"type":"final","message":"Done"}',
+      ]),
+      getTools: () => [tool({ name: 'inspect', execute })],
+    });
+
+    expect(result.status).toBe('completed');
+    expect(execute).toHaveBeenCalledOnce();
+
+    const malformed = tool({ name: 17 as unknown as string, execute });
+    await expect(runAgentRuntime({
+      goal: 'Reject malformed tools.',
+      model: sequenceModel(['{"type":"final","message":"Unsafe"}']),
+      getTools: () => [malformed],
+    })).rejects.toThrow('string name');
   });
 
   it('rejects invalid input before a tool executes', async () => {
@@ -260,6 +283,37 @@ describe('agent-native runtime', () => {
     ]);
   });
 
+  it('keeps a successful write successful when its output is not JSON-compatible', async () => {
+    const circularOutput: { staged: boolean; self?: unknown } = { staged: true };
+    circularOutput.self = circularOutput;
+    const execute = vi.fn(() => circularOutput);
+    const writeTool = tool({
+      name: 'stage_trip',
+      annotations: { readOnlyHint: false },
+      execute,
+    });
+
+    const result = await runAgentRuntime({
+      goal: 'Stage the trip once.',
+      model: sequenceModel([
+        '{"type":"tool_call","tool":"stage_trip","input":{}}',
+        '{"type":"final","message":"Trip staged."}',
+      ]),
+      getTools: () => [writeTool],
+      approve: () => true,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result.history[0]).toMatchObject({
+      ok: true,
+      output: {
+        unavailable: true,
+        reason: 'Tool output was not JSON-compatible.',
+      },
+    });
+  });
+
   it('isolates trace observer failures from approved side effects', async () => {
     const execute = vi.fn(() => ({ staged: true }));
     const writeTool = tool({
@@ -353,6 +407,47 @@ describe('agent-native runtime', () => {
     expect(result.events.at(-1)?.type).toBe('step_limit_reached');
   });
 
+  it('bounds tool inputs and failure messages before adding them to history', async () => {
+    const oversizedExecute = vi.fn();
+    const oversizedInput = 'x'.repeat(5_000);
+    await expect(runAgentRuntime({
+      goal: 'Reject oversized input.',
+      model: sequenceModel([JSON.stringify({
+        type: 'tool_call',
+        tool: 'inspect',
+        input: { payload: oversizedInput },
+      })]),
+      getTools: () => [tool({
+        name: 'inspect',
+        inputSchema: {
+          type: 'object',
+          properties: { payload: { type: 'string' } },
+          required: ['payload'],
+          additionalProperties: false,
+        },
+        execute: oversizedExecute,
+      })],
+    })).rejects.toThrow('Tool input exceeded');
+    expect(oversizedExecute).not.toHaveBeenCalled();
+
+    const result = await runAgentRuntime({
+      goal: 'Bound failures.',
+      model: sequenceModel(['{"type":"tool_call","tool":"inspect","input":{}}']),
+      getTools: () => [tool({
+        name: 'inspect',
+        execute: () => {
+          throw new Error('x'.repeat(10_000));
+        },
+      })],
+      maxSteps: 1,
+    });
+
+    expect(result.status).toBe('step_limit');
+    expect(result.history[0].error?.length).toBe(4_000);
+    const failureEvent = result.events.find(({ type }) => type === 'tool_failed');
+    expect(failureEvent?.type === 'tool_failed' ? failureEvent.error.length : 0).toBe(4_000);
+  });
+
   it('bounds stored tool output before it reaches later model prompts', async () => {
     const model = sequenceModel([
       '{"type":"tool_call","tool":"large_result","input":{}}',
@@ -369,8 +464,26 @@ describe('agent-native runtime', () => {
 
     expect(result.status).toBe('completed');
     expect(result.history[0].output).toMatchObject({ truncated: true });
-    expect(JSON.stringify(result.history[0].output).length).toBeLessThan(4_200);
+    expect(JSON.stringify(result.history[0].output).length).toBeLessThanOrEqual(4_000);
     expect(vi.mocked(model.generate).mock.calls[1][0].prompt.length).toBeLessThan(6_000);
+  });
+
+  it('bounds cumulative prompt history while preserving the most recent steps', () => {
+    const inspectTool = tool({ name: 'inspect', execute: () => null });
+    const history = Array.from({ length: 20 }, (_, index) => ({
+      step: index + 1,
+      tool: 'inspect',
+      input: { payload: `${index}-`.repeat(600) },
+      ok: true,
+      output: { result: `${index}-`.repeat(600) },
+    }));
+
+    const prompt = buildAgentRuntimePrompt('Inspect bounded history.', [inspectTool], history);
+    const historyLine = prompt.split('\n').find((line) => line.startsWith('Tool history:')) ?? '';
+
+    expect(historyLine).toContain('omittedEarlierSteps');
+    expect(historyLine).toContain('19-');
+    expect(historyLine.length).toBeLessThan(8_100);
   });
 
   it('rejects malformed, over-broad, and unavailable model decisions', async () => {
@@ -418,5 +531,68 @@ describe('agent-native runtime', () => {
 
     expect(result.status).toBe('completed');
     expect(execute).toHaveBeenCalledWith({}, { signal: activeController.signal });
+  });
+
+  it('rechecks cancellation after tool refresh and tool-start observers', async () => {
+    const refreshController = new AbortController();
+    const refreshModel = sequenceModel(['{"type":"final","message":"Too late"}']);
+    await expect(runAgentRuntime({
+      goal: 'Cancel after refresh.',
+      model: refreshModel,
+      getTools: () => [],
+      signal: refreshController.signal,
+      onEvent: (event) => {
+        if (event.type === 'tools_refreshed') refreshController.abort();
+      },
+    })).rejects.toThrow('cancelled');
+    expect(refreshModel.generate).not.toHaveBeenCalled();
+
+    const startController = new AbortController();
+    const execute = vi.fn();
+    await expect(runAgentRuntime({
+      goal: 'Cancel before execution.',
+      model: sequenceModel(['{"type":"tool_call","tool":"stage_trip","input":{}}']),
+      getTools: () => [tool({
+        name: 'stage_trip',
+        annotations: { readOnlyHint: false },
+        execute,
+      })],
+      signal: startController.signal,
+      approve: () => true,
+      onEvent: (event) => {
+        if (event.type === 'tool_started') startController.abort();
+      },
+    })).rejects.toThrow('cancelled');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('requires own properties and rejects non-plain tool schemas', async () => {
+    const execute = vi.fn();
+    await expect(runAgentRuntime({
+      goal: 'Require an own constructor field.',
+      model: sequenceModel(['{"type":"tool_call","tool":"inspect","input":{}}']),
+      getTools: () => [tool({
+        name: 'inspect',
+        inputSchema: {
+          type: 'object',
+          properties: { constructor: { type: 'string' } },
+          required: ['constructor'],
+          additionalProperties: false,
+        },
+        execute,
+      })],
+    })).rejects.toThrow('input.constructor is required');
+    expect(execute).not.toHaveBeenCalled();
+
+    const dateSchemaTool = tool({
+      name: 'date_schema',
+      inputSchema: new Date() as unknown as Record<string, unknown>,
+      execute,
+    });
+    await expect(runAgentRuntime({
+      goal: 'Reject non-plain schemas.',
+      model: sequenceModel(['{"type":"final","message":"Unsafe"}']),
+      getTools: () => [dateSchemaTool],
+    })).rejects.toThrow('input schema is invalid');
   });
 });

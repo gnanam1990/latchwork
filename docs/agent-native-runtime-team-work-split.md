@@ -46,7 +46,7 @@ These contracts are the handoff points between workstreams:
 | `AgentRunOptions` | Gnanasekaran | Anandh, Vasanth | goal, dynamic tool provider, model, step limit, cancellation, approval, and event sink |
 | `AgentDecision` | Gnanasekaran | Anandh | closed union of one tool call or a final message |
 | `AgentEvent` | Gnanasekaran | Vasanth | trace events for tool refresh, validation, approval, execution, failure, and completion |
-| `AgentRunResult` | Gnanasekaran | Vasanth | completed, approval-required, denied, ambiguous-write-failure, or step-limit outcome plus trace and history |
+| `AgentRunResult` | Gnanasekaran | Vasanth | `completed`, `approval_required`, `denied`, `write_failed`, or `step_limit` outcome plus trace and history |
 | travel state revision | Vasanth defines; Gnanasekaran enforces | runtime and UI | rejects stale model results after a human edits shared state |
 | benchmark task/result schema | Anandh | all three | comparable task success, identifier reuse, recovery, latency, and memory evidence |
 

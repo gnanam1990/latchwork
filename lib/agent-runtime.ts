@@ -87,7 +87,11 @@ const DEFAULT_MAX_STEPS = 6;
 const MAX_ALLOWED_STEPS = 20;
 const MAX_GOAL_CHARACTERS = 4_000;
 const MAX_MODEL_DECISION_CHARACTERS = 50_000;
+const MAX_TOOL_INPUT_CHARACTERS = 4_000;
 const MAX_STORED_TOOL_RESULT_CHARACTERS = 4_000;
+const MAX_STORED_ERROR_CHARACTERS = 4_000;
+const MAX_PROMPT_HISTORY_CHARACTERS = 8_000;
+const MAX_PROMPT_HISTORY_ENTRY_CHARACTERS = 2_000;
 const SUPPORTED_SCHEMA_KEYS = new Set([
   '$id',
   '$schema',
@@ -167,7 +171,7 @@ export function parseAgentDecision(raw: string): AgentDecision {
     if (!isPlainRecord(value.input)) {
       throw new AgentRuntimeError('Tool call input must be an object.');
     }
-    return { type: 'tool_call', tool: value.tool, input: value.input };
+    return { type: 'tool_call', tool: value.tool.trim(), input: value.input };
   }
 
   throw new AgentRuntimeError('Model requested an unsupported decision type.');
@@ -189,13 +193,7 @@ export function buildAgentRuntimePrompt(
     inputSchema,
     readOnly: annotations.readOnlyHint,
   }));
-  const compactHistory = history.map((entry) => ({
-    step: entry.step,
-    tool: entry.tool,
-    input: entry.input,
-    ok: entry.ok,
-    ...(entry.ok ? { output: entry.output } : { error: entry.error }),
-  }));
+  const compactHistory = buildPromptHistory(history);
 
   return [
     'You are an in-application WebMCP collaborator.',
@@ -236,6 +234,7 @@ export async function runAgentRuntime(options: AgentRunOptions): Promise<AgentRu
     const tools = [...await options.getTools()];
     validateToolRegistry(tools);
     emit({ type: 'tools_refreshed', step, toolNames: tools.map(({ name }) => name) });
+    throwIfAborted(options.signal);
 
     const rawDecision = await options.model.generate({
       prompt: buildAgentRuntimePrompt(goal, tools, history),
@@ -255,6 +254,7 @@ export async function runAgentRuntime(options: AgentRunOptions): Promise<AgentRu
       throw new AgentRuntimeError(`Model requested an unavailable tool: ${decision.tool}`);
     }
     validateToolInput(decision.input, tool.inputSchema);
+    assertToolInputSize(decision.input);
     const validatedInput = cloneJsonObject(decision.input);
     const execute = tool.execute.bind(tool);
     const readOnly = tool.annotations.readOnlyHint;
@@ -279,6 +279,7 @@ export async function runAgentRuntime(options: AgentRunOptions): Promise<AgentRu
 
     throwIfAborted(options.signal);
     emit({ type: 'tool_started', step, toolName: tool.name });
+    throwIfAborted(options.signal);
     try {
       const output = normalizeToolOutput(await execute(
         cloneJsonObject(validatedInput),
@@ -287,7 +288,7 @@ export async function runAgentRuntime(options: AgentRunOptions): Promise<AgentRu
       history.push({ step, tool: tool.name, input: validatedInput, ok: true, output });
       emit({ type: 'tool_succeeded', step, toolName: tool.name });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Tool execution failed.';
+      const message = normalizeToolError(error);
       history.push({ step, tool: tool.name, input: validatedInput, ok: false, error: message });
       emit({ type: 'tool_failed', step, toolName: tool.name, error: message });
       if (!readOnly) {
@@ -312,7 +313,13 @@ function validateToolRegistry(tools: readonly RuntimeTool[]): void {
     if (typeof tool !== 'object' || tool === null) {
       throw new AgentRuntimeError('Runtime tool entries must be objects.');
     }
+    if (typeof tool.name !== 'string') {
+      throw new AgentRuntimeError('Runtime tools require a string name.');
+    }
     if (!tool.name.trim()) throw new AgentRuntimeError('Runtime tools require a name.');
+    if (tool.name !== tool.name.trim()) {
+      throw new AgentRuntimeError(`Runtime tool names cannot have surrounding whitespace: ${tool.name}`);
+    }
     if (names.has(tool.name)) throw new AgentRuntimeError(`Duplicate runtime tool: ${tool.name}`);
     if (typeof tool.title !== 'string' || typeof tool.description !== 'string') {
       throw new AgentRuntimeError(`Runtime tool metadata is invalid: ${tool.name}`);
@@ -400,7 +407,7 @@ function validateSchemaValue(value: unknown, schema: Record<string, unknown>, pa
     }
     const required = Array.isArray(schema.required) ? schema.required as string[] : [];
     for (const key of required) {
-      if (!(key in value)) throw new AgentRuntimeError(`${path}.${key} is required.`);
+      if (!Object.hasOwn(value, key)) throw new AgentRuntimeError(`${path}.${key} is required.`);
     }
     for (const [key, childValue] of Object.entries(value)) {
       const childSchema = properties[key];
@@ -449,15 +456,127 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new AgentRuntimeError('Agent run was cancelled.');
 }
 
-function normalizeToolOutput(value: unknown): unknown {
-  const serialized = JSON.stringify(value) ?? 'null';
-  if (serialized.length <= MAX_STORED_TOOL_RESULT_CHARACTERS) {
-    return JSON.parse(serialized) as unknown;
+function assertToolInputSize(input: JsonObject): void {
+  const serialized = JSON.stringify(input);
+  if (serialized.length > MAX_TOOL_INPUT_CHARACTERS) {
+    throw new AgentRuntimeError('Tool input exceeded the runtime size limit.');
   }
-  return {
+}
+
+function buildPromptHistory(history: readonly AgentToolResult[]): unknown[] {
+  const selected: unknown[] = [];
+  let usedCharacters = 2;
+  let omittedEarlierSteps = 0;
+  const reservedOmissionMarkerCharacters = 64;
+
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    const promptEntry = boundPromptHistoryEntry({
+      step: entry.step,
+      tool: entry.tool,
+      input: entry.input,
+      ok: entry.ok,
+      ...(entry.ok ? { output: entry.output } : { error: entry.error }),
+    });
+    const serialized = JSON.stringify(promptEntry);
+    const separatorCharacters = selected.length > 0 ? 1 : 0;
+    if (usedCharacters + separatorCharacters + serialized.length
+      > MAX_PROMPT_HISTORY_CHARACTERS - reservedOmissionMarkerCharacters) {
+      omittedEarlierSteps = index + 1;
+      break;
+    }
+    selected.unshift(promptEntry);
+    usedCharacters += separatorCharacters + serialized.length;
+  }
+
+  if (omittedEarlierSteps > 0) selected.unshift({ omittedEarlierSteps });
+  return selected;
+}
+
+function boundPromptHistoryEntry(entry: Record<string, unknown>): Record<string, unknown> {
+  const serialized = JSON.stringify(entry);
+  if (serialized.length <= MAX_PROMPT_HISTORY_ENTRY_CHARACTERS) return entry;
+
+  return fitPreviewEnvelope({
+    step: entry.step,
+    tool: entry.tool,
+    ok: entry.ok,
     truncated: true,
-    preview: `${serialized.slice(0, MAX_STORED_TOOL_RESULT_CHARACTERS)}…`,
+  }, serialized, MAX_PROMPT_HISTORY_ENTRY_CHARACTERS);
+}
+
+function normalizeToolOutput(value: unknown): unknown {
+  try {
+    if (!isJsonCompatible(value)) return unavailableToolOutput();
+    const serialized = JSON.stringify(value) ?? 'null';
+    if (serialized.length <= MAX_STORED_TOOL_RESULT_CHARACTERS) {
+      return JSON.parse(serialized) as unknown;
+    }
+    return boundedOutputEnvelope(serialized);
+  } catch {
+    return unavailableToolOutput();
+  }
+}
+
+function boundedOutputEnvelope(serialized: string): Record<string, unknown> {
+  return fitPreviewEnvelope(
+    { truncated: true },
+    serialized,
+    MAX_STORED_TOOL_RESULT_CHARACTERS,
+  );
+}
+
+function fitPreviewEnvelope(
+  base: Record<string, unknown>,
+  serialized: string,
+  maxCharacters: number,
+): Record<string, unknown> {
+  let preview = serialized.slice(0, maxCharacters);
+  let envelope = { ...base, preview: `${preview}…` };
+  while (JSON.stringify(envelope).length > maxCharacters && preview.length > 0) {
+    const excess = JSON.stringify(envelope).length - maxCharacters;
+    preview = preview.slice(0, Math.max(0, preview.length - excess));
+    envelope = { ...base, preview: `${preview}…` };
+  }
+  return envelope;
+}
+
+function unavailableToolOutput(): Record<string, unknown> {
+  return {
+    unavailable: true,
+    reason: 'Tool output was not JSON-compatible.',
   };
+}
+
+function normalizeToolError(error: unknown): string {
+  let message = 'Tool execution failed.';
+  try {
+    if (error instanceof Error && typeof error.message === 'string' && error.message) {
+      message = error.message;
+    } else if (typeof error === 'string' && error) {
+      message = error;
+    }
+  } catch {
+    // Preserve the safe fallback when an untrusted error has a throwing getter.
+  }
+  if (message.length <= MAX_STORED_ERROR_CHARACTERS) return message;
+  return `${message.slice(0, MAX_STORED_ERROR_CHARACTERS - 1)}…`;
+}
+
+function isJsonCompatible(value: unknown, ancestors = new Set<object>()): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object') return false;
+  if (ancestors.has(value)) return false;
+  if (!Array.isArray(value) && !isPlainRecord(value)) return false;
+
+  ancestors.add(value);
+  try {
+    const children = Array.isArray(value) ? value : Object.values(value);
+    return children.every((child) => isJsonCompatible(child, ancestors));
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function toJsonCompatible(value: unknown): unknown {
@@ -488,5 +607,7 @@ function jsonEquals(left: unknown, right: unknown): boolean {
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
