@@ -52,6 +52,7 @@ export default function Home() {
   const workspaceRef = useRef(workspace);
   const workspaceRevisionRef = useRef(0);
   const modelRef = useRef<LocalTextModel | null>(null);
+  const modelLoadInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const commitWorkspace = useCallback((next: WorkspaceState) => {
     if (next === workspaceRef.current) return;
@@ -121,14 +122,18 @@ export default function Home() {
   const applyProposal = () => commitWorkspace(applyStagedProposal(workspaceRef.current));
 
   const loadLocalModel = async () => {
+    if (modelLoadInFlightRef.current) return;
+    modelLoadInFlightRef.current = true;
     setModelStatus('loading');
     setModelProgress(0);
     setModelDetail('Starting private model download…');
+    let recoveredAfterRetry = false;
     try {
       const previousModel = modelRef.current;
       modelRef.current = null;
       await previousModel?.dispose?.();
-      const model = await createBrowserLocalModel(({ progress, text }) => {
+      const model = await createBrowserLocalModel(({ progress, text, phase }) => {
+        if (phase === 'retrying') recoveredAfterRetry = true;
         if (!mountedRef.current) return;
         setModelProgress(Math.max(0, Math.min(1, progress)));
         setModelDetail(text || 'Loading local model…');
@@ -140,12 +145,17 @@ export default function Home() {
       modelRef.current = model;
       setModelProgress(1);
       setModelStatus('ready');
-      setModelDetail('Ready · inference stays in this browser');
+      setModelDetail(recoveredAfterRetry
+        ? 'Ready · recovered after one automatic retry · inference stays in this browser'
+        : 'Ready · inference stays in this browser');
     } catch (error) {
       if (!mountedRef.current) return;
       modelRef.current = null;
       setModelStatus('error');
-      setModelDetail(describeLocalModelError(error));
+      const detail = describeLocalModelError(error);
+      setModelDetail(recoveredAfterRetry ? `Automatic retry failed · ${detail}` : detail);
+    } finally {
+      modelLoadInFlightRef.current = false;
     }
   };
 

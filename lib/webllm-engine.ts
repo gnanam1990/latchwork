@@ -7,6 +7,7 @@ export const LOCAL_MODEL_CACHE_BACKEND = 'indexeddb' as const;
 export interface ModelLoadProgress {
   progress: number;
   text: string;
+  phase?: 'loading' | 'retrying';
 }
 
 export function describeLocalModelError(error: unknown): string {
@@ -17,6 +18,26 @@ export function describeLocalModelError(error: unknown): string {
     if (typeof message === 'string' && message.trim()) return message;
   }
   return 'Local model failed to load.';
+}
+
+export function isRetryableIndexedDbLoadError(error: unknown): boolean {
+  const message = describeLocalModelError(error);
+  return /invalidstateerror/i.test(message)
+    && /(?:indexeddb|idbdatabase)/i.test(message)
+    && /connection is (?:closing|closed)/i.test(message);
+}
+
+export async function retryTransientModelLoad<T>(
+  load: () => Promise<T>,
+  onRetry: (error: unknown) => void,
+): Promise<T> {
+  try {
+    return await load();
+  } catch (error) {
+    if (!isRetryableIndexedDbLoadError(error)) throw error;
+    onRetry(error);
+    return load();
+  }
 }
 
 export async function supportsWebGpu(): Promise<boolean> {
@@ -38,44 +59,63 @@ export async function createBrowserLocalModel(
   if (!await supportsWebGpu()) throw new Error('WebGPU is unavailable in this browser.');
 
   const { CreateWebWorkerMLCEngine, prebuiltAppConfig } = await import('@mlc-ai/web-llm');
-  const worker = new Worker(new URL('./webllm.worker.ts', import.meta.url), { type: 'module' });
+  let latestProgress = 0;
+  const reportProgress = ({ progress, text }: ModelLoadProgress) => {
+    const nextProgress = Number.isFinite(progress)
+      ? Math.max(0, Math.min(1, progress))
+      : latestProgress;
+    latestProgress = Math.max(latestProgress, nextProgress);
+    onProgress({ progress: latestProgress, text, phase: 'loading' });
+  };
 
-  try {
-    const engine = await CreateWebWorkerMLCEngine(worker, DEFAULT_LOCAL_MODEL, {
-      appConfig: {
-        ...prebuiltAppConfig,
-        cacheBackend: LOCAL_MODEL_CACHE_BACKEND,
-      },
-      initProgressCallback: ({ progress, text }) => onProgress({ progress, text }),
+  const createEngine = async () => {
+    const worker = new Worker(new URL('./webllm.worker.ts', import.meta.url), { type: 'module' });
+    try {
+      const engine = await CreateWebWorkerMLCEngine(worker, DEFAULT_LOCAL_MODEL, {
+        appConfig: {
+          ...prebuiltAppConfig,
+          cacheBackend: LOCAL_MODEL_CACHE_BACKEND,
+        },
+        initProgressCallback: reportProgress,
+      });
+      return { engine, worker };
+    } catch (error) {
+      worker.terminate();
+      throw error;
+    }
+  };
+
+  const { engine, worker } = await retryTransientModelLoad(createEngine, () => {
+    onProgress({
+      progress: latestProgress,
+      text: 'Storage interrupted · retrying once from cached progress…',
+      phase: 'retrying',
     });
+  });
 
-    return {
-      async complete(prompt: string): Promise<string> {
-        const response = await engine.chat.completions.create({
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.1,
-          max_tokens: 120,
-          response_format: {
-            type: 'json_object',
-            schema: getLocalAgentDecisionSchema(),
-          },
-        });
-        const content = response.choices[0]?.message.content;
-        if (typeof content !== 'string' || !content.trim()) {
-          throw new Error('Local model returned an empty decision.');
-        }
-        return content;
-      },
-      async dispose(): Promise<void> {
-        try {
-          await engine.unload();
-        } finally {
-          worker.terminate();
-        }
-      },
-    };
-  } catch (error) {
-    worker.terminate();
-    throw error;
-  }
+  return {
+    async complete(prompt: string): Promise<string> {
+      const response = await engine.chat.completions.create({
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.1,
+        max_tokens: 120,
+        response_format: {
+          type: 'json_object',
+          schema: getLocalAgentDecisionSchema(),
+        },
+      });
+      const content = response.choices[0]?.message.content;
+      if (typeof content !== 'string' || !content.trim()) {
+        throw new Error('Local model returned an empty decision.');
+      }
+      return content;
+    },
+    async dispose(): Promise<void> {
+      try {
+        await engine.unload();
+      } finally {
+        worker.terminate();
+      }
+    },
+  };
 }

@@ -30,6 +30,7 @@ See [the local runtime benchmark](docs/local-runtime-benchmark.md) for measured 
 | --- | --- |
 | WebGPU ready, model unloaded | The deterministic safe planner works; model download starts only after an explicit click |
 | Model loading | Download and initialization progress is shown in the agent panel |
+| Transient IndexedDB interruption | Latchwork terminates the failed worker and retries once from cached progress |
 | Model ready | Requests run in a dedicated browser worker and validated decisions may stage a proposal |
 | Unsupported or failed | The failure is shown honestly; deterministic planning remains available |
 
