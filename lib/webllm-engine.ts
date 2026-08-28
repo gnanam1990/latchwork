@@ -22,8 +22,9 @@ export function describeLocalModelError(error: unknown): string {
 
 export function isRetryableIndexedDbLoadError(error: unknown): boolean {
   const message = describeLocalModelError(error);
-  return /(?:indexeddb|idbdatabase)/i.test(message)
-    && /(?:invalidstateerror|connection is (?:closing|closed))/i.test(message);
+  return /invalidstateerror/i.test(message)
+    && /(?:indexeddb|idbdatabase)/i.test(message)
+    && /connection is (?:closing|closed)/i.test(message);
 }
 
 export async function retryTransientModelLoad<T>(

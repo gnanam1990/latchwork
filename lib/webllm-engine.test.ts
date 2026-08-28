@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  createBrowserLocalModel,
   describeLocalModelError,
   isRetryableIndexedDbLoadError,
   LOCAL_MODEL_CACHE_BACKEND,
@@ -7,7 +8,44 @@ import {
   supportsWebGpu,
 } from './webllm-engine';
 
-afterEach(() => vi.unstubAllGlobals());
+const webLlmMocks = vi.hoisted(() => ({
+  createEngine: vi.fn(),
+  prebuiltAppConfig: { model_list: [] },
+}));
+
+vi.mock('@mlc-ai/web-llm', () => ({
+  CreateWebWorkerMLCEngine: webLlmMocks.createEngine,
+  prebuiltAppConfig: webLlmMocks.prebuiltAppConfig,
+}));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
+
+function installModelLoadEnvironment() {
+  const workers: Array<{ terminate: ReturnType<typeof vi.fn> }> = [];
+  class FakeWorker {
+    terminate = vi.fn();
+
+    constructor() {
+      workers.push(this);
+    }
+  }
+
+  vi.stubGlobal('navigator', {
+    gpu: { requestAdapter: vi.fn(async () => ({ features: new Set() })) },
+  });
+  vi.stubGlobal('Worker', FakeWorker);
+  return workers;
+}
+
+function createReadyEngine() {
+  return {
+    chat: { completions: { create: vi.fn() } },
+    unload: vi.fn(async () => undefined),
+  };
+}
 
 describe('WebLLM capability detection', () => {
   it('rejects a browser that exposes WebGPU without a usable adapter', async () => {
@@ -52,6 +90,9 @@ describe('WebLLM storage policy', () => {
     expect(isRetryableIndexedDbLoadError({
       message: "InvalidStateError: Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing.",
     })).toBe(true);
+    expect(isRetryableIndexedDbLoadError(
+      new Error('InvalidStateError: IndexedDB transaction is not active'),
+    )).toBe(false);
     expect(isRetryableIndexedDbLoadError(new Error('QuotaExceededError: storage is full'))).toBe(false);
     expect(isRetryableIndexedDbLoadError(new Error("NetworkError: Cache.add() encountered a network error"))).toBe(false);
     expect(isRetryableIndexedDbLoadError(new Error('WebGPU device was lost'))).toBe(false);
@@ -85,5 +126,62 @@ describe('WebLLM storage policy', () => {
       .mockRejectedValueOnce(second);
     await expect(retryTransientModelLoad(retryingLoad, vi.fn())).rejects.toBe(second);
     expect(retryingLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries with a fresh worker and terminates every worker it no longer owns', async () => {
+    const workers = installModelLoadEnvironment();
+    const engine = createReadyEngine();
+    const transient = "InvalidStateError: Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing.";
+    webLlmMocks.createEngine
+      .mockRejectedValueOnce(transient)
+      .mockResolvedValueOnce(engine);
+    const onProgress = vi.fn();
+
+    const model = await createBrowserLocalModel(onProgress);
+
+    expect(webLlmMocks.createEngine).toHaveBeenCalledTimes(2);
+    expect(workers).toHaveLength(2);
+    expect(webLlmMocks.createEngine.mock.calls[0]?.[0]).toBe(workers[0]);
+    expect(webLlmMocks.createEngine.mock.calls[1]?.[0]).toBe(workers[1]);
+    expect(workers[0]?.terminate).toHaveBeenCalledOnce();
+    expect(workers[1]?.terminate).not.toHaveBeenCalled();
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'retrying',
+      text: expect.stringContaining('retrying once'),
+    }));
+
+    await model.dispose?.();
+    expect(engine.unload).toHaveBeenCalledOnce();
+    expect(workers[1]?.terminate).toHaveBeenCalledOnce();
+  });
+
+  it('terminates one worker without retrying a permanent load failure', async () => {
+    const workers = installModelLoadEnvironment();
+    const permanent = new Error('QuotaExceededError: storage is full');
+    webLlmMocks.createEngine.mockRejectedValueOnce(permanent);
+    const onProgress = vi.fn();
+
+    await expect(createBrowserLocalModel(onProgress)).rejects.toBe(permanent);
+
+    expect(webLlmMocks.createEngine).toHaveBeenCalledOnce();
+    expect(workers).toHaveLength(1);
+    expect(workers[0]?.terminate).toHaveBeenCalledOnce();
+    expect(onProgress).not.toHaveBeenCalledWith(expect.objectContaining({ phase: 'retrying' }));
+  });
+
+  it('terminates both workers when the bounded retry also fails', async () => {
+    const workers = installModelLoadEnvironment();
+    const first = "InvalidStateError on IDBDatabase: connection is closing";
+    const second = "InvalidStateError on IDBDatabase: connection is closed";
+    webLlmMocks.createEngine
+      .mockRejectedValueOnce(first)
+      .mockRejectedValueOnce(second);
+
+    await expect(createBrowserLocalModel(vi.fn())).rejects.toBe(second);
+
+    expect(webLlmMocks.createEngine).toHaveBeenCalledTimes(2);
+    expect(workers).toHaveLength(2);
+    expect(workers[0]?.terminate).toHaveBeenCalledOnce();
+    expect(workers[1]?.terminate).toHaveBeenCalledOnce();
   });
 });
