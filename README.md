@@ -4,7 +4,7 @@
 
 Latchwork is a private, constraint-aware planning workspace where a person fixes the decisions that must not move and an agent explores safer alternatives around them.
 
-The foundation includes a working visual planning board, browser-local language-model reasoning, deterministic proposal staging, human-only final application, and real browser WebMCP tool registration through `document.modelContext.registerTool(...)`.
+The foundation includes a working visual planning board, browser-local language-model reasoning, deterministic proposal staging, human-only final application, a reusable bounded multi-step runtime, and real browser WebMCP tool registration through `document.modelContext.registerTool(...)`.
 
 ## Current foundation
 
@@ -15,6 +15,7 @@ The foundation includes a working visual planning board, browser-local language-
 - Reviewable staged plan changes
 - Human-controlled final apply action
 - WebMCP tools with read-only annotations and abort-signal cleanup
+- A model-neutral multi-step runtime with dynamic tool refresh, bounded intermediate-result history, fail-closed core JSON Schema validation, approval pauses, isolated event traces, fail-closed write failures, and step limits
 - Unit tests for lock enforcement, proposal application, and the WebMCP surface
 - Pull-request CI covering lint, type safety, tests, production build, and dependency audit
 
@@ -23,6 +24,10 @@ The deterministic safety planner remains available without a model. On WebGPU-ca
 Model output is untrusted. Latchwork constrains it to a JSON decision schema, rejects malformed or unsupported actions, and passes accepted staging requests through the same deterministic lock-preserving planner. A model cannot directly mutate the workspace or apply a proposal.
 
 See [the local runtime benchmark](docs/local-runtime-benchmark.md) for measured load behavior, focused decision latency, WebMCP proof, and current coverage limits.
+
+See [the solo work split](docs/agent-native-runtime-solo-work-split.md) for the PRD-aligned Day 1–6+ execution plan, ownership boundaries, milestones, and Day 3 success gate.
+
+The reusable runtime contract is implemented and tested independently of the current one-shot UI flow. Connecting the browser-local model and current WebMCP tool definitions through that runtime is the next integration slice; the README does not claim that integration is complete yet.
 
 ## Local model states
 
