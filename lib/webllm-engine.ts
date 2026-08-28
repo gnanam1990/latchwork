@@ -2,10 +2,21 @@ import type { LocalTextModel } from './local-agent';
 import { getLocalAgentDecisionSchema } from './local-agent';
 
 export const DEFAULT_LOCAL_MODEL = 'Llama-3.2-1B-Instruct-q4f16_1-MLC';
+export const LOCAL_MODEL_CACHE_BACKEND = 'indexeddb' as const;
 
 export interface ModelLoadProgress {
   progress: number;
   text: string;
+}
+
+export function describeLocalModelError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return 'Local model failed to load.';
 }
 
 export async function supportsWebGpu(): Promise<boolean> {
@@ -26,11 +37,15 @@ export async function createBrowserLocalModel(
 ): Promise<LocalTextModel> {
   if (!await supportsWebGpu()) throw new Error('WebGPU is unavailable in this browser.');
 
-  const { CreateWebWorkerMLCEngine } = await import('@mlc-ai/web-llm');
+  const { CreateWebWorkerMLCEngine, prebuiltAppConfig } = await import('@mlc-ai/web-llm');
   const worker = new Worker(new URL('./webllm.worker.ts', import.meta.url), { type: 'module' });
 
   try {
     const engine = await CreateWebWorkerMLCEngine(worker, DEFAULT_LOCAL_MODEL, {
+      appConfig: {
+        ...prebuiltAppConfig,
+        cacheBackend: LOCAL_MODEL_CACHE_BACKEND,
+      },
       initProgressCallback: ({ progress, text }) => onProgress({ progress, text }),
     });
 

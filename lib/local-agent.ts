@@ -31,9 +31,8 @@ const decisionSchema = {
   type: 'object',
   properties: {
     action: { enum: LOCAL_AGENT_ACTIONS },
-    rationale: { type: 'string', minLength: 1, maxLength: 280 },
   },
-  required: ['action', 'rationale'],
+  required: ['action'],
   additionalProperties: false,
 } as const;
 
@@ -60,11 +59,17 @@ export function buildLocalAgentPrompt(state: WorkspaceState, instruction: string
 
   return [
     'You are Latchwork, a browser-local planning collaborator.',
-    'Return one JSON object matching the supplied schema. Do not include markdown.',
-    'Allowed actions:',
-    '- stage_safer_plan: prepare a reviewable proposal; never apply it.',
-    '- explain: explain the current plan without changing it.',
-    '- none: use when no safe action is needed.',
+    'Choose exactly one action and return only JSON, for example {"action":"explain"}.',
+    'Action rules:',
+    '- stage_safer_plan: choose this when the user asks to find, prepare, or stage a safer plan.',
+    '- explain: choose this when the user asks to inspect, explain, summarize, or identify risks.',
+    '- none: choose this only when the user explicitly asks for no action or no safe action is needed.',
+    'Locked work must stay fixed, but stage_safer_plan may move unlocked work in a proposal.',
+    'Do not choose none merely because the user says locked work must not move.',
+    'Example: "Find a safer plan without moving locked work" means {"action":"stage_safer_plan"}.',
+    'Example: "Explain the current risks" means {"action":"explain"}.',
+    'Example: "Keep the plan unchanged" means {"action":"none"}.',
+    'A staged plan is only a reviewable proposal. It is never applied automatically.',
     'You cannot apply, delete, unlock, or directly mutate any workspace data.',
     `User instruction: ${JSON.stringify(instruction.trim())}`,
     `Workspace snapshot: ${JSON.stringify(snapshot)}`,
@@ -80,18 +85,26 @@ export function parseLocalAgentDecision(raw: string): LocalAgentDecision {
   }
 
   if (!isPlainRecord(value)) throw new Error('Local model decision must be an object.');
-  const keys = Object.keys(value).sort();
-  if (keys.length !== 2 || keys[0] !== 'action' || keys[1] !== 'rationale') {
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== 'action') {
     throw new Error('Local model decision contains unsupported fields.');
   }
   if (!LOCAL_AGENT_ACTIONS.includes(value.action as LocalAgentAction)) {
     throw new Error('Local model requested an unsupported action.');
   }
-  if (typeof value.rationale !== 'string' || value.rationale.trim().length === 0 || value.rationale.length > 280) {
-    throw new Error('Local model rationale is invalid.');
-  }
 
-  return { action: value.action as LocalAgentAction, rationale: value.rationale.trim() };
+  const action = value.action as LocalAgentAction;
+  return { action, rationale: rationaleForAction(action) };
+}
+
+function rationaleForAction(action: LocalAgentAction): string {
+  if (action === 'stage_safer_plan') {
+    return 'Dependency verification should happen before WebMCP integration. One lock-preserving change is staged for review.';
+  }
+  if (action === 'explain') {
+    return 'The plan preserves every locked constraint, but dependency verification currently follows integration and creates two tight handoffs.';
+  }
+  return 'No workspace change was requested, so the current plan remains untouched.';
 }
 
 export async function runLocalAgent(

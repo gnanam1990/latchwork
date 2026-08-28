@@ -18,6 +18,7 @@ import { installDocumentTools } from '../lib/webmcp';
 import {
   createBrowserLocalModel,
   DEFAULT_LOCAL_MODEL,
+  describeLocalModelError,
   supportsWebGpu,
 } from '../lib/webllm-engine';
 
@@ -36,6 +37,10 @@ function formatMinutes(minutes: number, launch: boolean | undefined): string {
   return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
 }
 
+function formatDuration(milliseconds: number): string {
+  return milliseconds < 1000 ? `${Math.round(milliseconds)} ms` : `${(milliseconds / 1000).toFixed(1)} s`;
+}
+
 export default function Home() {
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const [modelStatus, setModelStatus] = useState<ModelStatus>('checking');
@@ -43,6 +48,7 @@ export default function Home() {
   const [modelDetail, setModelDetail] = useState('Checking WebGPU support…');
   const [agentRequest, setAgentRequest] = useState('Find a safer plan without moving locked work.');
   const [agentRationale, setAgentRationale] = useState('Load the local model, then ask it to inspect this plan.');
+  const [lastDecision, setLastDecision] = useState<string | null>(null);
   const workspaceRef = useRef(workspace);
   const workspaceRevisionRef = useRef(0);
   const modelRef = useRef<LocalTextModel | null>(null);
@@ -139,7 +145,7 @@ export default function Home() {
       if (!mountedRef.current) return;
       modelRef.current = null;
       setModelStatus('error');
-      setModelDetail(error instanceof Error ? error.message : 'Local model failed to load.');
+      setModelDetail(describeLocalModelError(error));
     }
   };
 
@@ -148,6 +154,7 @@ export default function Home() {
     if (!model) return;
     const startRevision = workspaceRevisionRef.current;
     const startWorkspace = workspaceRef.current;
+    const startedAt = performance.now();
     setModelStatus('thinking');
     setModelDetail('Reasoning locally…');
     try {
@@ -158,6 +165,7 @@ export default function Home() {
         workspaceRevisionRef.current,
       );
       if (!acceptedWorkspace) {
+        setLastDecision(`discarded · ${formatDuration(performance.now() - startedAt)}`);
         setModelStatus('ready');
         setModelDetail('Decision discarded · workspace changed while the model was thinking');
         setAgentRationale('The workspace changed before that decision finished. Run it again against the latest plan.');
@@ -165,9 +173,11 @@ export default function Home() {
       }
       commitWorkspace(acceptedWorkspace);
       setAgentRationale(result.decision.rationale);
+      setLastDecision(`${result.decision.action} · ${formatDuration(performance.now() - startedAt)}`);
       setModelStatus('ready');
       setModelDetail('Ready · last decision validated');
     } catch (error) {
+      setLastDecision(`rejected · ${formatDuration(performance.now() - startedAt)}`);
       setModelStatus('ready');
       setModelDetail(error instanceof Error
         ? `Decision rejected · ${error.message}`
@@ -286,9 +296,10 @@ export default function Home() {
             <div className="model-status-row">
               <span className={`model-status-dot ${modelStatus}`} />
               <strong>{modelStatus === 'ready' ? 'Local model online' : modelStatus === 'thinking' ? 'Thinking locally' : 'Local model'}</strong>
-              <span className="model-size">~0.9 GB</span>
+              <span className="model-size">~0.66 GB download</span>
             </div>
             <p>{modelDetail}</p>
+            {lastDecision && <p className="model-diagnostic">Last decision · {lastDecision}</p>}
             {modelStatus === 'loading' && (
               <div className="model-progress" aria-label={`Model loading ${Math.round(modelProgress * 100)}%`}>
                 <i style={{ width: `${Math.round(modelProgress * 100)}%` }} />
