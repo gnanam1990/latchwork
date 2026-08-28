@@ -1,15 +1,7 @@
 import type { PlanProposal, WorkspaceState } from './planning';
+import type { RuntimeTool } from './agent-runtime';
 
-export interface WebMcpTool {
-  name: string;
-  title: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  annotations: {
-    readOnlyHint: boolean;
-  };
-  execute(input: Record<string, unknown>): unknown | Promise<unknown>;
-}
+export type WebMcpTool = RuntimeTool;
 
 export interface ModelContextLike {
   registerTool(tool: WebMcpTool, options?: { signal?: AbortSignal }): void | Promise<void>;
