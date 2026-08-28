@@ -8,7 +8,15 @@ import {
   stageSaferPlan,
   type LaneId,
 } from '../lib/planning';
+import { runLocalAgent, type LocalTextModel } from '../lib/local-agent';
 import { installDocumentTools } from '../lib/webmcp';
+import {
+  createBrowserLocalModel,
+  DEFAULT_LOCAL_MODEL,
+  supportsWebGpu,
+} from '../lib/webllm-engine';
+
+type ModelStatus = 'checking' | 'unsupported' | 'idle' | 'loading' | 'ready' | 'thinking' | 'error';
 
 const laneOrder: Array<{ id: LaneId; title: string }> = [
   { id: 'now', title: 'Now' },
@@ -24,8 +32,14 @@ function formatMinutes(minutes: number, launch: boolean | undefined): string {
 }
 
 export default function Home() {
-  const [workspace, setWorkspace] = useState(() => stageSaferPlan(initialWorkspace));
+  const [workspace, setWorkspace] = useState(initialWorkspace);
+  const [modelStatus, setModelStatus] = useState<ModelStatus>('checking');
+  const [modelProgress, setModelProgress] = useState(0);
+  const [modelDetail, setModelDetail] = useState('Checking WebGPU support…');
+  const [agentRequest, setAgentRequest] = useState('Find a safer plan without moving locked work.');
+  const [agentRationale, setAgentRationale] = useState('Load the local model, then ask it to inspect this plan.');
   const workspaceRef = useRef(workspace);
+  const modelRef = useRef<LocalTextModel | null>(null);
   const metrics = calculateMetrics(workspace.steps);
   const lanes = useMemo(
     () => laneOrder.map((lane) => ({
@@ -40,6 +54,19 @@ export default function Home() {
   useEffect(() => {
     workspaceRef.current = workspace;
   }, [workspace]);
+
+  useEffect(() => {
+    const updateSupport = () => {
+      if (supportsWebGpu()) {
+        setModelStatus('idle');
+        setModelDetail('WebGPU ready · model not loaded');
+      } else {
+        setModelStatus('unsupported');
+        setModelDetail('WebGPU unavailable · safe planner still works');
+      }
+    };
+    queueMicrotask(updateSupport);
+  }, []);
 
   useEffect(() => installDocumentTools({
     getState: () => workspaceRef.current,
@@ -61,8 +88,52 @@ export default function Home() {
     },
   }), []);
 
-  const stageProposal = () => setWorkspace((current) => stageSaferPlan(current));
+  const stageProposal = () => {
+    setWorkspace((current) => stageSaferPlan(current));
+    setAgentRationale('The deterministic safety planner found the dependency handoff and staged one reviewable change.');
+  };
   const applyProposal = () => setWorkspace((current) => applyStagedProposal(current));
+
+  const loadLocalModel = async () => {
+    setModelStatus('loading');
+    setModelProgress(0);
+    setModelDetail('Starting private model download…');
+    try {
+      modelRef.current = await createBrowserLocalModel(({ progress, text }) => {
+        setModelProgress(Math.max(0, Math.min(1, progress)));
+        setModelDetail(text || 'Loading local model…');
+      });
+      setModelProgress(1);
+      setModelStatus('ready');
+      setModelDetail('Ready · inference stays in this browser');
+    } catch (error) {
+      modelRef.current = null;
+      setModelStatus('error');
+      setModelDetail(error instanceof Error ? error.message : 'Local model failed to load.');
+    }
+  };
+
+  const askLocalModel = async () => {
+    const model = modelRef.current;
+    if (!model) return;
+    setModelStatus('thinking');
+    setModelDetail('Reasoning locally…');
+    try {
+      const result = await runLocalAgent(model, workspaceRef.current, agentRequest);
+      workspaceRef.current = result.workspace;
+      setWorkspace(result.workspace);
+      setAgentRationale(result.decision.rationale);
+      setModelStatus('ready');
+      setModelDetail('Ready · last decision validated');
+    } catch (error) {
+      setModelStatus('error');
+      setModelDetail(error instanceof Error ? error.message : 'Local decision could not be validated.');
+    }
+  };
+
+  const modelStatusLabel = modelStatus === 'ready' || modelStatus === 'thinking'
+    ? 'Local model ready'
+    : 'Safe planner ready';
 
   return (
     <main className="app-shell">
@@ -77,7 +148,7 @@ export default function Home() {
           <span className="chevron">⌄</span>
         </div>
         <div className="top-actions">
-          <span className="sync-state"><i /> Local planner ready</span>
+          <span className="sync-state"><i /> {modelStatusLabel}</span>
           <button className="avatar" type="button" aria-label="Open profile">GS</button>
         </div>
       </header>
@@ -119,7 +190,7 @@ export default function Home() {
             </div>
             <div className="board-actions">
               <button className="ghost-button" type="button"><span>↗</span> Compare</button>
-              <button className="dark-button" type="button" onClick={stageProposal}><span>✦</span> Ask agent</button>
+              <button className="dark-button" type="button" onClick={stageProposal}><span>✦</span> Safe planner</button>
             </div>
           </div>
 
@@ -167,12 +238,49 @@ export default function Home() {
             <button className="more-button" type="button" aria-label="Agent options">•••</button>
           </div>
 
+          <section className="model-card" aria-label="Browser-local model">
+            <div className="model-status-row">
+              <span className={`model-status-dot ${modelStatus}`} />
+              <strong>{modelStatus === 'ready' ? 'Local model online' : modelStatus === 'thinking' ? 'Thinking locally' : 'Local model'}</strong>
+              <span className="model-size">~0.9 GB</span>
+            </div>
+            <p>{modelDetail}</p>
+            {modelStatus === 'loading' && (
+              <div className="model-progress" aria-label={`Model loading ${Math.round(modelProgress * 100)}%`}>
+                <i style={{ width: `${Math.round(modelProgress * 100)}%` }} />
+              </div>
+            )}
+            {(modelStatus === 'idle' || modelStatus === 'error') && (
+              <button className="load-model-button" type="button" onClick={loadLocalModel}>
+                {modelStatus === 'error' ? 'Retry model load' : `Load ${DEFAULT_LOCAL_MODEL.replace('-q4f16_1-MLC', '')}`}
+              </button>
+            )}
+            {modelStatus === 'unsupported' && <span className="model-help">Use a WebGPU browser to enable the language model.</span>}
+          </section>
+
+          <div className="agent-compose">
+            <label htmlFor="agent-request">Ask the local collaborator</label>
+            <textarea
+              id="agent-request"
+              value={agentRequest}
+              onChange={(event) => setAgentRequest(event.target.value)}
+              rows={3}
+              maxLength={280}
+            />
+            <button
+              className="run-model-button"
+              type="button"
+              onClick={askLocalModel}
+              disabled={modelStatus !== 'ready' || !agentRequest.trim()}
+            >
+              {modelStatus === 'thinking' ? 'Thinking…' : 'Run locally'} <span>✦</span>
+            </button>
+          </div>
+
           <div className="agent-message">
-            <span className="message-label">{workspace.proposal ? 'Proposal 01' : 'Plan aligned'}</span>
-            <h3>{workspace.proposal ? 'I found a safer path that still makes Friday.' : 'The safer sequence is now active.'}</h3>
-            <p>{workspace.proposal
-              ? 'Moving the dependency check ahead of tool integration removes both handoff risks without touching your locked decisions.'
-              : 'Every locked decision stayed intact. Ask the planner whenever the workspace changes.'}</p>
+            <span className="message-label">{workspace.proposal ? 'Proposal 01' : 'Ready to inspect'}</span>
+            <h3>{workspace.proposal ? 'A safer path is staged for your review.' : 'Your locked decisions remain untouched.'}</h3>
+            <p>{agentRationale}</p>
           </div>
 
           <div className="change-preview">
