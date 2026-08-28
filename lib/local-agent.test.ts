@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { initialWorkspace } from './planning';
 import {
+  acceptLocalAgentResult,
   buildLocalAgentPrompt,
   parseLocalAgentDecision,
   runLocalAgent,
@@ -50,5 +51,15 @@ describe('Latchwork local agent', () => {
 
     expect(result.workspace).toBe(initialWorkspace);
     expect(result.workspace.proposal).toBeNull();
+  });
+
+  it('rejects an in-flight result after the workspace revision changes', async () => {
+    const model: LocalTextModel = {
+      complete: vi.fn(async () => '{"action":"stage_safer_plan","rationale":"Verify dependencies first."}'),
+    };
+    const result = await runLocalAgent(model, initialWorkspace, 'Find a safer plan');
+
+    expect(acceptLocalAgentResult(result, 4, 5)).toBeNull();
+    expect(acceptLocalAgentResult(result, 4, 4)).toBe(result.workspace);
   });
 });

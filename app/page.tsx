@@ -1,14 +1,19 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   applyStagedProposal,
   calculateMetrics,
   initialWorkspace,
   stageSaferPlan,
   type LaneId,
+  type WorkspaceState,
 } from '../lib/planning';
-import { runLocalAgent, type LocalTextModel } from '../lib/local-agent';
+import {
+  acceptLocalAgentResult,
+  runLocalAgent,
+  type LocalTextModel,
+} from '../lib/local-agent';
 import { installDocumentTools } from '../lib/webmcp';
 import {
   createBrowserLocalModel,
@@ -39,8 +44,15 @@ export default function Home() {
   const [agentRequest, setAgentRequest] = useState('Find a safer plan without moving locked work.');
   const [agentRationale, setAgentRationale] = useState('Load the local model, then ask it to inspect this plan.');
   const workspaceRef = useRef(workspace);
+  const workspaceRevisionRef = useRef(0);
   const modelRef = useRef<LocalTextModel | null>(null);
   const mountedRef = useRef(true);
+  const commitWorkspace = useCallback((next: WorkspaceState) => {
+    if (next === workspaceRef.current) return;
+    workspaceRef.current = next;
+    workspaceRevisionRef.current += 1;
+    setWorkspace(next);
+  }, []);
   const metrics = calculateMetrics(workspace.steps);
   const lanes = useMemo(
     () => laneOrder.map((lane) => ({
@@ -51,10 +63,6 @@ export default function Home() {
     })),
     [workspace.steps],
   );
-
-  useEffect(() => {
-    workspaceRef.current = workspace;
-  }, [workspace]);
 
   useEffect(() => {
     const updateSupport = () => {
@@ -94,17 +102,16 @@ export default function Home() {
     },
     stageSaferPlan: () => {
       const staged = stageSaferPlan(workspaceRef.current);
-      workspaceRef.current = staged;
-      setWorkspace(staged);
+      commitWorkspace(staged);
       return staged.proposal;
     },
-  }), []);
+  }), [commitWorkspace]);
 
   const stageProposal = () => {
-    setWorkspace((current) => stageSaferPlan(current));
+    commitWorkspace(stageSaferPlan(workspaceRef.current));
     setAgentRationale('The deterministic safety planner found the dependency handoff and staged one reviewable change.');
   };
-  const applyProposal = () => setWorkspace((current) => applyStagedProposal(current));
+  const applyProposal = () => commitWorkspace(applyStagedProposal(workspaceRef.current));
 
   const loadLocalModel = async () => {
     setModelStatus('loading');
@@ -138,12 +145,24 @@ export default function Home() {
   const askLocalModel = async () => {
     const model = modelRef.current;
     if (!model) return;
+    const startRevision = workspaceRevisionRef.current;
+    const startWorkspace = workspaceRef.current;
     setModelStatus('thinking');
     setModelDetail('Reasoning locally…');
     try {
-      const result = await runLocalAgent(model, workspaceRef.current, agentRequest);
-      workspaceRef.current = result.workspace;
-      setWorkspace(result.workspace);
+      const result = await runLocalAgent(model, startWorkspace, agentRequest);
+      const acceptedWorkspace = acceptLocalAgentResult(
+        result,
+        startRevision,
+        workspaceRevisionRef.current,
+      );
+      if (!acceptedWorkspace) {
+        setModelStatus('ready');
+        setModelDetail('Decision discarded · workspace changed while the model was thinking');
+        setAgentRationale('The workspace changed before that decision finished. Run it again against the latest plan.');
+        return;
+      }
+      commitWorkspace(acceptedWorkspace);
       setAgentRationale(result.decision.rationale);
       setModelStatus('ready');
       setModelDetail('Ready · last decision validated');

@@ -19,6 +19,14 @@ export interface LocalAgentResult {
   workspace: WorkspaceState;
 }
 
+export function acceptLocalAgentResult(
+  result: LocalAgentResult,
+  startedAtRevision: number,
+  currentRevision: number,
+): WorkspaceState | null {
+  return startedAtRevision === currentRevision ? result.workspace : null;
+}
+
 const decisionSchema = {
   type: 'object',
   properties: {
