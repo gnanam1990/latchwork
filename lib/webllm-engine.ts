@@ -42,6 +42,13 @@ export async function createBrowserLocalModel(
         }
         return content;
       },
+      async dispose(): Promise<void> {
+        try {
+          await engine.unload();
+        } finally {
+          worker.terminate();
+        }
+      },
     };
   } catch (error) {
     worker.terminate();

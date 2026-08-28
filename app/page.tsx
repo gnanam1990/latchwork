@@ -40,6 +40,7 @@ export default function Home() {
   const [agentRationale, setAgentRationale] = useState('Load the local model, then ask it to inspect this plan.');
   const workspaceRef = useRef(workspace);
   const modelRef = useRef<LocalTextModel | null>(null);
+  const mountedRef = useRef(true);
   const metrics = calculateMetrics(workspace.steps);
   const lanes = useMemo(
     () => laneOrder.map((lane) => ({
@@ -57,6 +58,7 @@ export default function Home() {
 
   useEffect(() => {
     const updateSupport = () => {
+      if (!mountedRef.current) return;
       if (supportsWebGpu()) {
         setModelStatus('idle');
         setModelDetail('WebGPU ready · model not loaded');
@@ -66,6 +68,16 @@ export default function Home() {
       }
     };
     queueMicrotask(updateSupport);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const model = modelRef.current;
+      modelRef.current = null;
+      void model?.dispose?.();
+    };
   }, []);
 
   useEffect(() => installDocumentTools({
@@ -99,14 +111,24 @@ export default function Home() {
     setModelProgress(0);
     setModelDetail('Starting private model download…');
     try {
-      modelRef.current = await createBrowserLocalModel(({ progress, text }) => {
+      const previousModel = modelRef.current;
+      modelRef.current = null;
+      await previousModel?.dispose?.();
+      const model = await createBrowserLocalModel(({ progress, text }) => {
+        if (!mountedRef.current) return;
         setModelProgress(Math.max(0, Math.min(1, progress)));
         setModelDetail(text || 'Loading local model…');
       });
+      if (!mountedRef.current) {
+        await model.dispose?.();
+        return;
+      }
+      modelRef.current = model;
       setModelProgress(1);
       setModelStatus('ready');
       setModelDetail('Ready · inference stays in this browser');
     } catch (error) {
+      if (!mountedRef.current) return;
       modelRef.current = null;
       setModelStatus('error');
       setModelDetail(error instanceof Error ? error.message : 'Local model failed to load.');
@@ -126,8 +148,10 @@ export default function Home() {
       setModelStatus('ready');
       setModelDetail('Ready · last decision validated');
     } catch (error) {
-      setModelStatus('error');
-      setModelDetail(error instanceof Error ? error.message : 'Local decision could not be validated.');
+      setModelStatus('ready');
+      setModelDetail(error instanceof Error
+        ? `Decision rejected · ${error.message}`
+        : 'Decision rejected · local output could not be validated.');
     }
   };
 

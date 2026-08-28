@@ -11,6 +11,7 @@ export interface LocalAgentDecision {
 
 export interface LocalTextModel {
   complete(prompt: string): Promise<string>;
+  dispose?(): void | Promise<void>;
 }
 
 export interface LocalAgentResult {
