@@ -76,7 +76,7 @@ export function buildLocalAgentPrompt(state: WorkspaceState, instruction: string
   ].join('\n');
 }
 
-export function parseLocalAgentDecision(raw: string): LocalAgentDecision {
+export function parseLocalAgentDecision(raw: string, state: WorkspaceState): LocalAgentDecision {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -94,15 +94,18 @@ export function parseLocalAgentDecision(raw: string): LocalAgentDecision {
   }
 
   const action = value.action as LocalAgentAction;
-  return { action, rationale: rationaleForAction(action) };
+  return { action, rationale: rationaleForAction(action, state) };
 }
 
-function rationaleForAction(action: LocalAgentAction): string {
+function rationaleForAction(action: LocalAgentAction, state: WorkspaceState): string {
+  const metrics = calculateMetrics(state.steps);
   if (action === 'stage_safer_plan') {
-    return 'Dependency verification should happen before WebMCP integration. One lock-preserving change is staged for review.';
+    return metrics.tightHandoffs > 0
+      ? `The plan has ${metrics.tightHandoffs} tight handoffs. One lock-preserving change is staged for review.`
+      : 'The current plan has no tight handoffs, so no proposal was staged.';
   }
   if (action === 'explain') {
-    return 'The plan preserves every locked constraint, but dependency verification currently follows integration and creates two tight handoffs.';
+    return `The plan preserves every locked constraint and currently has ${metrics.conflicts} conflicts and ${metrics.tightHandoffs} tight handoffs.`;
   }
   return 'No workspace change was requested, so the current plan remains untouched.';
 }
@@ -113,7 +116,10 @@ export async function runLocalAgent(
   instruction: string,
 ): Promise<LocalAgentResult> {
   if (!instruction.trim()) throw new Error('Enter a planning request first.');
-  const decision = parseLocalAgentDecision(await model.complete(buildLocalAgentPrompt(state, instruction)));
+  const decision = parseLocalAgentDecision(
+    await model.complete(buildLocalAgentPrompt(state, instruction)),
+    state,
+  );
 
   return {
     decision,

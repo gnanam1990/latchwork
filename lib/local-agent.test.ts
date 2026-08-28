@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { initialWorkspace } from './planning';
+import { applyStagedProposal, calculateMetrics, initialWorkspace, stageSaferPlan } from './planning';
 import {
   acceptLocalAgentResult,
   buildLocalAgentPrompt,
@@ -20,13 +20,13 @@ describe('Latchwork local agent', () => {
   });
 
   it('accepts only the closed decision contract', () => {
-    expect(parseLocalAgentDecision('{"action":"explain"}')).toEqual({
+    expect(parseLocalAgentDecision('{"action":"explain"}', initialWorkspace)).toEqual({
       action: 'explain',
-      rationale: 'The plan preserves every locked constraint, but dependency verification currently follows integration and creates two tight handoffs.',
+      rationale: 'The plan preserves every locked constraint and currently has 0 conflicts and 2 tight handoffs.',
     });
-    expect(() => parseLocalAgentDecision('not json')).toThrow('malformed JSON');
-    expect(() => parseLocalAgentDecision('{"action":"apply_plan"}')).toThrow('unsupported action');
-    expect(() => parseLocalAgentDecision('{"action":"none","tool":"delete"}')).toThrow('unsupported fields');
+    expect(() => parseLocalAgentDecision('not json', initialWorkspace)).toThrow('malformed JSON');
+    expect(() => parseLocalAgentDecision('{"action":"apply_plan"}', initialWorkspace)).toThrow('unsupported action');
+    expect(() => parseLocalAgentDecision('{"action":"none","tool":"delete"}', initialWorkspace)).toThrow('unsupported fields');
   });
 
   it('stages a proposal without applying it or moving locked work', async () => {
@@ -52,6 +52,20 @@ describe('Latchwork local agent', () => {
 
     expect(result.workspace).toBe(initialWorkspace);
     expect(result.workspace.proposal).toBeNull();
+  });
+
+  it('explains the current metrics after an approved plan removes the handoffs', async () => {
+    const appliedWorkspace = applyStagedProposal(stageSaferPlan(initialWorkspace));
+    const model: LocalTextModel = {
+      complete: vi.fn(async () => '{"action":"explain"}'),
+    };
+
+    expect(calculateMetrics(appliedWorkspace.steps).tightHandoffs).toBe(0);
+    const result = await runLocalAgent(model, appliedWorkspace, 'Explain the current plan');
+
+    expect(result.workspace).toBe(appliedWorkspace);
+    expect(result.decision.rationale).toContain('0 conflicts and 0 tight handoffs');
+    expect(result.decision.rationale).not.toContain('2 tight handoffs');
   });
 
   it('rejects an in-flight result after the workspace revision changes', async () => {
