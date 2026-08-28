@@ -18,9 +18,11 @@ The foundation includes a working visual planning board, browser-local language-
 - Unit tests for lock enforcement, proposal application, and the WebMCP surface
 - Pull-request CI covering lint, type safety, tests, production build, and dependency audit
 
-The deterministic safety planner remains available without a model. On WebGPU-capable browsers, the user can explicitly load `Llama-3.2-1B-Instruct-q4f16_1-MLC` and ask it to reason over the current workspace. The model artifact is downloaded and cached by the browser on first use (approximately 0.9 GB); inference and workspace prompts then stay in the browser.
+The deterministic safety planner remains available without a model. On WebGPU-capable browsers, the user can explicitly load `Llama-3.2-1B-Instruct-q4f16_1-MLC` and ask it to reason over the current workspace. The model weights are downloaded into the browser's IndexedDB cache on first use (approximately 0.66 GB, with approximately 0.9 GB of WebGPU memory required); inference and workspace prompts then stay in the browser.
 
 Model output is untrusted. Latchwork constrains it to a JSON decision schema, rejects malformed or unsupported actions, and passes accepted staging requests through the same deterministic lock-preserving planner. A model cannot directly mutate the workspace or apply a proposal.
+
+See [the local runtime benchmark](docs/local-runtime-benchmark.md) for measured load behavior, focused decision latency, WebMCP proof, and current coverage limits.
 
 ## Local model states
 

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { supportsWebGpu } from './webllm-engine';
+import {
+  describeLocalModelError,
+  LOCAL_MODEL_CACHE_BACKEND,
+  supportsWebGpu,
+} from './webllm-engine';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -26,5 +30,19 @@ describe('WebLLM capability detection', () => {
     });
 
     await expect(supportsWebGpu()).resolves.toBe(false);
+  });
+});
+
+describe('WebLLM error reporting', () => {
+  it('preserves errors serialized across a worker boundary', () => {
+    expect(describeLocalModelError({ message: 'WebGPU device was lost' })).toBe('WebGPU device was lost');
+    expect(describeLocalModelError('Worker initialization failed')).toBe('Worker initialization failed');
+    expect(describeLocalModelError({ code: 'unknown' })).toBe('Local model failed to load.');
+  });
+});
+
+describe('WebLLM storage policy', () => {
+  it('uses the IndexedDB backend that accepts cross-origin model responses', () => {
+    expect(LOCAL_MODEL_CACHE_BACKEND).toBe('indexeddb');
   });
 });
