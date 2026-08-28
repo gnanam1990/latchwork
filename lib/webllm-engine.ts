@@ -61,7 +61,10 @@ export async function createBrowserLocalModel(
   const { CreateWebWorkerMLCEngine, prebuiltAppConfig } = await import('@mlc-ai/web-llm');
   let latestProgress = 0;
   const reportProgress = ({ progress, text }: ModelLoadProgress) => {
-    latestProgress = Math.max(latestProgress, Math.max(0, Math.min(1, progress)));
+    const nextProgress = Number.isFinite(progress)
+      ? Math.max(0, Math.min(1, progress))
+      : latestProgress;
+    latestProgress = Math.max(latestProgress, nextProgress);
     onProgress({ progress: latestProgress, text, phase: 'loading' });
   };
 

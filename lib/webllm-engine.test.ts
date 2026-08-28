@@ -155,6 +155,31 @@ describe('WebLLM storage policy', () => {
     expect(workers[1]?.terminate).toHaveBeenCalledOnce();
   });
 
+  it('preserves finite progress after an invalid progress report', async () => {
+    installModelLoadEnvironment();
+    const engine = createReadyEngine();
+    webLlmMocks.createEngine.mockImplementationOnce(async (
+      _worker: unknown,
+      _model: unknown,
+      config: {
+        initProgressCallback(report: { progress: number; text: string }): void;
+      },
+    ) => {
+      config.initProgressCallback({ progress: Number.NaN, text: 'Invalid progress' });
+      config.initProgressCallback({ progress: 0.5, text: 'Valid progress' });
+      return engine;
+    });
+    const onProgress = vi.fn();
+
+    const model = await createBrowserLocalModel(onProgress);
+
+    expect(onProgress.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+      progress: 0.5,
+      text: 'Valid progress',
+    }));
+    await model.dispose?.();
+  });
+
   it('terminates one worker without retrying a permanent load failure', async () => {
     const workers = installModelLoadEnvironment();
     const permanent = new Error('QuotaExceededError: storage is full');
