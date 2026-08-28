@@ -25,6 +25,12 @@ The staged result did not move any plan step immediately. The final **Apply prop
 - An observed cached reload completed in approximately 3.8 seconds.
 - The UI now distinguishes the approximately 0.66 GB model download from the approximately 0.9 GB WebGPU memory requirement.
 
+## Recovery policy
+
+The runtime now treats only an IndexedDB connection-closing `InvalidStateError` as transient. It terminates the failed worker, preserves the highest observed progress, creates one fresh worker, and retries once so WebLLM can resume cached shards. Quota, WebGPU, Cache API, and unrelated network errors remain fail-closed and are shown to the user without automatic retry.
+
+The normal cached path was rechecked live after this change. The automatic recovery and second-failure boundaries are covered by deterministic fault-injection tests; the browser cache was not intentionally corrupted to trigger a live retry.
+
 ## Contract finding
 
 The first two live prompts used a schema requiring both `action` and free-form `rationale`. Both returned valid JSON but selected `none` when `stage_safer_plan` was expected. Removing free-form generation from the model contract was not enough by itself; the 1B model also needed explicit examples clarifying that locked work stays fixed while unlocked work may be moved in a staged proposal.
@@ -52,6 +58,7 @@ Live calls confirmed that the workspace began with no proposal, reported zero co
 - Browser WebGPU detection: pass
 - Dedicated WebLLM worker: pass
 - IndexedDB download and cached reload: pass, with one resumable cold-download interruption observed
+- Bounded automatic IndexedDB recovery: deterministic tests pass; live fault not induced
 - Closed JSON decision validation: pass
 - Focused three-intent smoke test: 3/3 pass
 - Deterministic proposal staging: pass
